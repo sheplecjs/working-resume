@@ -30,5 +30,8 @@ tailored/rendercv_output/*.md
 tailored/rendercv_output/*.pdf
 tailored/rendercv_output/*.typ
 
+# Logs
+logs/*.log
+
 # Other
 .DS_Store

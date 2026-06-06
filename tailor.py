@@ -14,6 +14,7 @@ import base64
 import json
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -26,6 +27,16 @@ from settings import Settings
 MODEL = "claude-sonnet-4-6"
 JDS_DIR = Path("jds")
 TAILORED_DIR = Path("tailored")
+LOGS_DIR = Path("logs")
+
+_log_file: Path | None = None
+
+
+def _log(phase: str, content: str) -> None:
+    if _log_file is None:
+        return
+    with _log_file.open("a") as f:
+        f.write(f"\n{'=' * 60}\n[{phase}]\n{'=' * 60}\n{content}\n")
 
 
 # ── Terminal helpers ──────────────────────────────────────────────────────────
@@ -89,22 +100,79 @@ def select_tailored_yaml() -> Path:
         print("  Enter a number from the list.")
 
 
-def extract_jd_text(path: Path) -> str:
+def _extract_pdf_image_blocks(path: Path) -> list[dict]:
+    """Return Claude image content blocks for every image XObject in the PDF."""
+    _JPEG_MAGIC = b"\xff\xd8"
+    _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+    reader = PdfReader(path)
+    blocks: list[dict] = []
+    for page in reader.pages:
+        resources = page.get("/Resources", {})
+        xobjects = resources.get("/XObject", {})
+        for name in xobjects:
+            xobj = xobjects[name].get_object()
+            if xobj.get("/Subtype") != "/Image":
+                continue
+            data = xobj.get_data()
+            if data[:2] == _JPEG_MAGIC:
+                media_type = "image/jpeg"
+            elif data[:8] == _PNG_MAGIC:
+                media_type = "image/png"
+            else:
+                continue
+            blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": base64.standard_b64encode(data).decode(),
+                },
+            })
+    return blocks
+
+
+def extract_jd_text(path: Path, client: Anthropic | None = None) -> str:
     if path.suffix == ".md":
         return path.read_text()
     reader = PdfReader(path)
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    if text.strip() or client is None:
+        return text
+    # Image-only PDF: fall back to Claude vision transcription
+    print("  PDF has no text layer — using Claude vision to transcribe...")
+    blocks = _extract_pdf_image_blocks(path)
+    if not blocks:
+        return text
+    blocks.append({
+        "type": "text",
+        "text": (
+            "These images are pages from a job description PDF. "
+            "Transcribe all text exactly as it appears, preserving structure with newlines. "
+            "Output only the transcribed text, nothing else."
+        ),
+    })
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=4096,
+        messages=[{"role": "user", "content": blocks}],
+    )
+    _log("jd_transcription", resp.content[0].text)
+    return resp.content[0].text
 
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
-def parse_json(text: str) -> dict:
-    """Parse JSON from LLM response, stripping markdown fences if present."""
+def parse_json(text: str, phase: str = "") -> dict:
+    _log(f"{phase}.raw_response", text)
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
         text = "\n".join(lines[1:-1])
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        _log(f"{phase}.parse_error", f"{exc}\n\nCleaned text:\n{text}")
+        raise
 
 
 def bank_context(bank: ContentBank) -> str:
@@ -156,7 +224,7 @@ def run_gap_analysis(client: Anthropic, jd_text: str, bank: ContentBank, resume_
             f"Return JSON matching this schema exactly:\n{_GAP_SCHEMA}"
         )}],
     )
-    return parse_json(resp.content[0].text)
+    return parse_json(resp.content[0].text, "gap_analysis")
 
 
 def display_gap_analysis(a: dict) -> None:
@@ -242,7 +310,7 @@ def run_tailoring(
             f"Return JSON matching this schema exactly:\n{_TAILORING_SCHEMA}"
         )}],
     )
-    return parse_json(resp.content[0].text)
+    return parse_json(resp.content[0].text, "tailoring")
 
 
 def display_tailoring(tailoring: dict, bank: ContentBank) -> None:
@@ -364,7 +432,7 @@ def run_recruiter_review(client: Anthropic, pngs: list[Path], jd_summary: dict) 
         max_tokens=1024,
         messages=[{"role": "user", "content": image_blocks}],
     )
-    return parse_json(resp.content[0].text)
+    return parse_json(resp.content[0].text, "recruiter_review")
 
 
 def display_recruiter_review(review: dict) -> None:
@@ -435,7 +503,7 @@ def run_revision(
             f"Return JSON matching this schema exactly:\n{_TAILORING_SCHEMA}"
         )}],
     )
-    return parse_json(resp.content[0].text)
+    return parse_json(resp.content[0].text, "revision")
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
@@ -458,8 +526,13 @@ def main() -> None:
             print("\n  Done.\n")
             return
 
+        global _log_file
+        LOGS_DIR.mkdir(exist_ok=True)
+        _log_file = LOGS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{selected.stem}.log"
+        print(f"  Logging to {_log_file}")
+
         print(f"\n  Parsing {selected.name}...")
-        jd_text = extract_jd_text(selected)
+        jd_text = extract_jd_text(selected, client)
 
         # Phase 1: Gap Analysis
         section("Phase 1/5: Gap Analysis")
