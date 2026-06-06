@@ -1,0 +1,9 @@
+extends: default
+ignore: |
+  .venv/
+  rendercv_output/
+rules:
+  document-start: disable
+  line-length:
+    max: 220
+    level: warning

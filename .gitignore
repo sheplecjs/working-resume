@@ -1,0 +1,34 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Env
+.env
+
+# Dev tool cahces
+.claude
+.ruff_cache
+
+# Resume - contains contact details
+resume.yaml
+content_bank.yaml
+
+# JDs / CVs
+jds/*.pdf
+jds/*.md
+tailored/*.yaml
+tailored/rendercv_output/*.png
+tailored/rendercv_output/*.html
+tailored/rendercv_output/*.md
+tailored/rendercv_output/*.pdf
+tailored/rendercv_output/*.typ
+
+# Other
+.DS_Store

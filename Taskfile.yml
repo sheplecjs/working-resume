@@ -1,0 +1,53 @@
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task: cli
+
+  cli:
+    desc: Start the resume tailoring cli`
+    cmds:
+      - uv run python tailor.py
+
+  venv:
+    desc: Create virtual environment and sync dependencies
+    cmds:
+      - uv venv
+      - uv sync
+
+  check:deps:
+    desc: Audit Python deps with uv and list global npm packages
+    cmds:
+      - uv audit
+      - npm ls -g --depth=0
+
+  check:lint:
+    desc: Lint and format Python with ruff
+    cmds:
+      - uv run ruff check .
+      - uv run ruff format --check .
+
+  check:types:
+    desc: Type-check Python with ty
+    cmds:
+      - uv run ty check
+
+  check:yaml:
+    desc: Lint YAML files with yamllint
+    cmds:
+      - uv run yamllint .
+
+  check:secrets:
+    desc: Scan for hardcoded secrets with detect-secrets
+    cmds:
+      - uv run detect-secrets scan
+
+  check:
+    desc: Run all checks (deps, lint, types, yaml, secrets)
+    cmds:
+      - task: check:deps
+      - task: check:lint
+      - task: check:types
+      - task: check:yaml
+      - task: check:secrets
